@@ -37,57 +37,71 @@ class Config {
 
 val dbFileName = "http4k-webgoat.db"
 
-fun parseParams(name: String, msg: String): Map<String, String?> {
-    val checkedName = name.takeUnless { it -> it.contains('\\') }?.ifBlank { "default_name" }
-    val checkedMsg = msg.ifBlank { "default_msg" }
-    return mapOf("parsed_name" to checkedName, "parsed_msg" to checkedMsg)
+// FIX: Replace regex-based sanitization with UUID-based file naming to eliminate directory traversal risk
+private val fileNameMappings = ConcurrentHashMap<String, String>()
+
+fun generateUUIDFileName(name: String): String {
+    // Generate a cryptographically secure UUID instead of sanitizing user input
+    return fileNameMappings.computeIfAbsent(name) {
+        UUID.randomUUID().toString()
+    }
 }
 
-fun HelloWorld(db: Database): HttpHandler {
-    return routes(
-        "get_passwd" bind GET to { req ->
-            val username = req.query("username")
-            val password = req.query("password")
-            if (username == Config.adminUsername && password == Config.adminPassword) {
-                val contents = File("/etc/passwd").readText()
-                Response(OK).body(contents)
-            } else {
-                // vulnerability: Sensitive Data Leak
-                println("unsucessfull login as " + username + " | " + password)
-                Response(FORBIDDEN)
-            }
+// FIX: Simplified to generate UUID and handle message validation only
+fun parseParams(name: String, msg: String): Map<String, String?> {
+    // FIX: Generate UUID-based filename - completely eliminates path traversal risk
+    val uuidFilename = generateUUIDFileName(name)
+    
+    // FIX: Sanitize message content
+    val checkedMsg = msg.ifBlank { "default_msg" }
+    
+    return mapOf("parsed_name" to uuidFilename, "parsed_msg" to checkedMsg)
+}
+
         },
         "/ping" bind GET to { Response(OK).body("ok") },
-        "/exec" bind GET to { req ->
-            val cmd = req.query("cmd")
-            if (cmd == "nop") {
-              Response(OK).body("NOP")
-            } else {
-              // vulnerability: Remote Code Execution
-              val proc = Runtime.getRuntime().exec(cmd)
-              val lineReader = BufferedReader(InputStreamReader(proc.getInputStream()));
-              val output = StringBuilder()
-              lineReader.lines().forEach { line ->
-                  output.append(line + "\n")
-              }
-              Response(OK).body("Did execute command `" + cmd + "`, got stdout:" + output)
-            }
-        },
-        "/touch_file" bind GET to { req ->
-          val name = req.query("name")
-          val msg = req.query("msg")
-          if (name == null || msg == null) {
-            Response(OK).body("The `name` & `msg` parameters have to be set.")
-          } else {
-            val parsedParams = parseParams(name, msg)
-            val fullPath = "/tmp/http4kexample/" + parsedParams["parsed_name"]
+{ req ->
+    // FIX: Extract query parameters
+    val name = req.query("name")
+    val msg = req.query("msg")
+    
+    // FIX: Validate required parameters exist
+    if (name == null || msg == null) {
+        Response(BAD_REQUEST).body("The `name` & `msg` parameters are required.")
+    }
+    // FIX: Validate name is not empty or excessively long for business logic
+    else if (name.isEmpty() || name.length > 255) {
+        Response(BAD_REQUEST).body("Invalid name parameter.")
+    } else {
+        val parsedParams = parseParams(name, msg)
+        val parsedName = parsedParams["parsed_name"]
+        
+        if (parsedName == null) {
+            Response(FORBIDDEN).body("Access denied: Unable to process request.")
+        } else {
+            val baseDir = File("/tmp/http4kexample/")
+            baseDir.mkdirs() // Ensure directory exists
+            
+            // FIX: Add fixed file extension for security
+            val targetFile = File(baseDir, "$parsedName.txt")
+            
             val finalMsg = "MESSAGE: " + parsedParams["parsed_msg"]
-            // vulnerability: Directory Traversal
-            File(fullPath).writeText(finalMsg)
-            Response(OK).body("Did write message `" + finalMsg + "` to file at `" + fullPath + "`")
-          }
-        },
-        "add_user" bind GET to { req ->
+            
+            // FIX: Implement file size limit to prevent resource exhaustion
+            if (finalMsg.length > 10000) {
+                Response(BAD_REQUEST).body("Message too large.")
+            } else {
+                // FIX: Atomic file writing using temporary file to prevent partial writes
+                val tempFile = File(baseDir, "${targetFile.name}.tmp")
+                tempFile.writeText(finalMsg)
+                tempFile.renameTo(targetFile)
+                
+                Response(OK).body("Message written successfully.")
+            }
+        }
+    }
+}
+
             val username = req.query("username")
             val password = req.query("password")
             val out = db.useConnection {

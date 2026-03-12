@@ -38,25 +38,37 @@ class Config {
 val dbFileName = "http4k-webgoat.db"
 
 fun parseParams(name: String, msg: String): Map<String, String?> {
-    val checkedName = name.takeUnless { it -> it.contains('\\') }?.ifBlank { "default_name" }
+    // FIX: Generate UUID instead of using user-controlled filename to eliminate filename manipulation attacks
+    val generatedFileName = UUID.randomUUID().toString()
+    
     val checkedMsg = msg.ifBlank { "default_msg" }
-    return mapOf("parsed_name" to checkedName, "parsed_msg" to checkedMsg)
+    return mapOf("parsed_name" to generatedFileName, "parsed_msg" to checkedMsg)
 }
 
+
 fun HelloWorld(db: Database): HttpHandler {
-    return routes(
-        "get_passwd" bind GET to { req ->
-            val username = req.query("username")
-            val password = req.query("password")
-            if (username == Config.adminUsername && password == Config.adminPassword) {
-                val contents = File("/etc/passwd").readText()
-                Response(OK).body(contents)
-            } else {
-                // vulnerability: Sensitive Data Leak
-                println("unsucessfull login as " + username + " | " + password)
-                Response(FORBIDDEN)
-            }
-        },
+fun validateAndResolvePath(baseDir: String, fileName: String): File? {
+    // FIX: Implement path canonicalization and validation to ensure file path stays within base directory
+    val basePath = Paths.get(baseDir).toAbsolutePath().normalize()
+    val resolvedPath = basePath.resolve(fileName).normalize()
+    
+    // FIX: Add explicit symlink detection to prevent bypass through symbolic links
+    if (Files.exists(resolvedPath) && Files.isSymbolicLink(resolvedPath)) {
+        return null // Symbolic link detected - reject operation
+    }
+    
+fun getValidatedBaseDir(): String {
+    // FIX: Extract base directory from environment variable for better configuration management
+    val baseDir = System.getenv("FILE_WRITE_BASE_DIR") ?: "/tmp/http4kexample/"
+    val basePath = Paths.get(baseDir).toAbsolutePath()
+    
+    // FIX: Validate directory exists and is writable at configuration time
+    if (!Files.exists(basePath) || !Files.isDirectory(basePath) || !Files.isWritable(basePath)) {
+        throw IllegalStateException("FILE_WRITE_BASE_DIR must be a valid, writable directory: $baseDir")
+    }
+    return basePath.toString()
+}
+
         "/ping" bind GET to { Response(OK).body("ok") },
         "/exec" bind GET to { req ->
             val cmd = req.query("cmd")
